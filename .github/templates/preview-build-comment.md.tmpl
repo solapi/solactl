@@ -1,0 +1,71 @@
+<!-- preview-build -->
+## 📦 v${VERSION} Preview Build
+
+Release Please가 다음 릴리즈를 준비 중입니다: **v${VERSION}** (commit `${SHORT_SHA}`).
+이 PR이 머지되면 정식 릴리즈가 자동으로 생성됩니다. 머지 전에 아래 미리보기 바이너리로 새 버전을 검증할 수 있습니다.
+
+> [!IMPORTANT]
+> 이 바이너리는 **공식 릴리즈가 아닙니다.** GitHub Actions Artifact는 약 **14일 후 자동 삭제**되며 다운로드에는 GitHub 로그인이 필요합니다.
+
+### 다운로드
+
+**옵션 A — GitHub CLI (권장)**
+
+```bash
+gh run download ${RUN_ID} \
+  --repo ${REPO} \
+  --name ${ARTIFACT_NAME} \
+  --dir solactl-preview
+cd solactl-preview
+```
+
+**옵션 B — 웹 브라우저**
+
+[Workflow Run #${RUN_ID}](${RUN_URL}) 페이지 하단 _Artifacts_ 섹션에서 [`${ARTIFACT_NAME}`](${ARTIFACT_URL}) 을 받아 압축을 풉니다. 다운로드 받은 zip 안에는 OS/아키텍처별 tarball·zip 과 `checksums.txt` 가 들어 있습니다.
+
+### 실행
+
+#### Linux / macOS
+
+플랫폼에 맞는 tarball을 풉니다 (`<OS>` = `linux` 또는 `darwin`, `<ARCH>` = `amd64` 또는 `arm64`):
+
+```bash
+tar -xzf solactl_${VERSION}-preview-${SHORT_SHA}_<OS>_<ARCH>.tar.gz
+chmod +x solactl
+./solactl version
+# 예상 출력: solactl ${VERSION}-preview-${SHORT_SHA} (commit: ..., date: ...)
+```
+
+> [!NOTE]
+> macOS에서 _"확인되지 않은 개발자"_ 경고가 뜨면 quarantine 속성을 제거하세요:
+> ```bash
+> xattr -d com.apple.quarantine ./solactl
+> ```
+
+#### Windows
+
+```powershell
+Expand-Archive solactl_${VERSION}-preview-${SHORT_SHA}_windows_amd64.zip -DestinationPath .
+.\solactl_${VERSION}-preview-${SHORT_SHA}_windows_amd64\solactl.exe version
+```
+
+### 무결성 검증 (선택)
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+### 검증 포인트
+
+머지 전에 아래 항목들을 확인해 주세요:
+
+- 이 PR 상단의 _Release notes_ 에 나열된 변경 사항이 의도대로 동작하는지
+- `solactl version` 출력이 위 예상 출력과 일치하는지
+- 회귀 가능성이 있는 기존 명령들 (`solactl configure`, `solactl send sms`, `solactl quota`, `solactl kakao` 등)
+- 자주 쓰는 워크플로 (설정 파일 생성·로드, `--profile` 전환, `--debug` 출력)
+
+문제가 있다면 이 PR에 코멘트로 알려주세요. 머지 후 release 워크플로가 자동으로 정식 바이너리를 빌드·배포합니다.
+
+---
+
+<sub>이 댓글은 <code>.github/workflows/release-please.yml</code> 의 <code>preview-release-pr</code> job 에 의해 자동으로 생성·갱신됩니다 · build commit <code>${SHA}</code> · run [#${RUN_ID}](${RUN_URL})</sub>

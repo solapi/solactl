@@ -145,6 +145,141 @@ jobs:
           gh api "repos/$REPO/statuses/$SHA" \
             -f state=failure -f context="Lint" -f description="Lint failed"
 
+  preview-release-pr:
+    name: Preview Build (Release PR)
+    needs: release-please
+    if: ${{ !needs.release-please.outputs.release_created && needs.release-please.outputs.pr_head_sha != '' }}
+    runs-on: ubuntu-latest
+    env:
+      ARTIFACT_NAME_PREFIX: solactl-preview
+    steps:
+      - name: Set pending status
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.release-please.outputs.pr_head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state=pending -f context="Preview Build" -f description="Building preview binaries..."
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.release-please.outputs.pr_head_sha }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.1'
+
+      - name: Resolve preview version
+        id: version
+        run: |
+          VERSION=$(jq -r '."."' .release-please-manifest.json)
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            echo "::error::Failed to read version from .release-please-manifest.json"
+            exit 1
+          fi
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="v${VERSION}-preview-${SHORT_SHA}"
+          ARTIFACT_NAME="${ARTIFACT_NAME_PREFIX}-v${VERSION}-${SHORT_SHA}"
+          {
+            echo "version=${VERSION}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "tag=${TAG}"
+            echo "artifact_name=${ARTIFACT_NAME}"
+          } >> "$GITHUB_OUTPUT"
+          echo "GORELEASER_CURRENT_TAG=${TAG}" >> "$GITHUB_ENV"
+
+      - name: Run GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --snapshot --skip=publish --clean
+
+      - name: Upload preview artifacts
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.artifact_name }}
+          path: |
+            dist/solactl_*.tar.gz
+            dist/solactl_*.zip
+            dist/checksums.txt
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Comment preview guide on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHORT_SHA: ${{ steps.version.outputs.short_sha }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ needs.release-please.outputs.pr_head_sha }}
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+          ARTIFACT_NAME: ${{ steps.version.outputs.artifact_name }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEMPLATE_PATH: .github/templates/preview-build-comment.md.tmpl
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$TEMPLATE_PATH" ]; then
+            echo "::error::Comment template not found at $TEMPLATE_PATH"
+            exit 1
+          fi
+
+          PR_NUMBER=$(gh pr list --repo "$REPO" --head release-please--branches--main --state open --json number --jq '.[0].number')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::warning::No open release-please PR found; skipping comment"
+            exit 0
+          fi
+
+          export VERSION SHORT_SHA TAG SHA ARTIFACT_NAME ARTIFACT_URL RUN_ID RUN_URL REPO
+
+          BODY_FILE="$(mktemp)"
+          envsubst '${VERSION} ${SHORT_SHA} ${TAG} ${SHA} ${ARTIFACT_NAME} ${ARTIFACT_URL} ${RUN_ID} ${RUN_URL} ${REPO}' \
+            < "$TEMPLATE_PATH" > "$BODY_FILE"
+
+          PAYLOAD_FILE="$(mktemp)"
+          jq -Rs '{body: .}' "$BODY_FILE" > "$PAYLOAD_FILE"
+
+          EXISTING_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- preview-build -->")) | .id' | head -n 1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            echo "Updating existing preview comment $EXISTING_ID on PR #$PR_NUMBER"
+            gh api -X PATCH "repos/$REPO/issues/comments/$EXISTING_ID" --input "$PAYLOAD_FILE" > /dev/null
+          else
+            echo "Creating new preview comment on PR #$PR_NUMBER"
+            gh api "repos/$REPO/issues/$PR_NUMBER/comments" --input "$PAYLOAD_FILE" > /dev/null
+          fi
+
+      - name: Report success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.release-please.outputs.pr_head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state=success -f context="Preview Build" -f description="Preview binaries ready"
+
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ needs.release-please.outputs.pr_head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$REPO/statuses/$SHA" \
+            -f state=failure -f context="Preview Build" -f description="Preview build failed"
+
   goreleaser:
     name: Release Binaries
     needs: release-please
